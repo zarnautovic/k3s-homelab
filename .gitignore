@@ -48,3 +48,5 @@ ansible/inventory.ini
 
 # Ignore Ansible group_vars file
 ansible/group_vars/all.yml
+
+.vscode/
