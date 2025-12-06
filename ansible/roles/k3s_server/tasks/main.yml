@@ -1,0 +1,88 @@
+
+---
+- name: Create K3s config directory
+  become: true
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    mode: '0755'
+
+- name: Render K3s server config (init) on first control-plane node
+  become: true
+  ansible.builtin.template:
+    src: k3s-config-init.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    mode: '0644'
+  when: inventory_hostname == groups['cp'][0]
+
+- name: Render K3s server config (join) on other control-plane nodes
+  become: true
+  ansible.builtin.template:
+    src: k3s-config-join.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    mode: '0644'
+  when: inventory_hostname != groups['cp'][0]
+
+- name: Download K3s installer
+  become: true
+  ansible.builtin.get_url:
+    url: https://get.k3s.io
+    dest: /tmp/get-k3s.sh
+    mode: '0755'
+
+- name: Install K3s server
+  become: true
+  ansible.builtin.command: sh /tmp/get-k3s.sh server
+  args:
+    creates: /usr/local/bin/k3s
+  environment:
+    INSTALL_K3S_VERSION: "{{ k3s_version }}"
+
+- name: Ensure k3s service is enabled and running
+  become: true
+  ansible.builtin.service:
+    name: k3s
+    state: started
+    enabled: true
+
+- name: Prepare local kubeconfig from cp1
+  when: inventory_hostname == groups['cp'][0]
+  run_once: true
+  block:
+    - name: Slurp kubeconfig from cp1
+      become: true
+      ansible.builtin.slurp:
+        src: /etc/rancher/k3s/k3s.yaml
+      register: k3s_file
+
+    - name: Parse kubeconfig as YAML
+      ansible.builtin.set_fact:
+        k3s_datasource: "{{ k3s_file.content | b64decode | from_yaml }}"
+
+    - name: Patch clusters[0].cluster.server to cp1 IP (initially)
+      ansible.builtin.set_fact:
+        k3s_datasource: "{{ k3s_datasource | combine(parameters) }}"
+      vars:
+        parameters:
+          clusters:
+            - cluster:
+                certificate-authority-data: "{{ k3s_datasource.clusters[0].cluster['certificate-authority-data'] }}"
+                server: "https://{{ ansible_host }}:6443"
+              name: "{{ k3s_datasource.clusters[0].name }}"
+
+    - name: Ensure local .kube dir exists
+      delegate_to: localhost
+      become: false
+      ansible.builtin.file:
+        path: "{{ lookup('env','HOME') }}/.kube"
+        state: directory
+        mode: '0755'
+
+    - name: Write kubeconfig to local ~/.kube/config
+      delegate_to: localhost
+      become: false
+      ansible.builtin.copy:
+        content: "{{ k3s_datasource | to_nice_yaml(indent=2) }}"
+        dest: "{{ lookup('env','HOME') }}/.kube/config"
+        mode: '0600'
+

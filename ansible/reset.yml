@@ -1,0 +1,7 @@
+---
+- name: Reset K3s on all nodes
+  hosts: all
+  become: true
+  gather_facts: false
+  roles:
+    - reset

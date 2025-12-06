@@ -1,0 +1,64 @@
+---
+- name: Run k3s-uninstall.sh if present (control-plane or agent)
+  become: true
+  ansible.builtin.command: /usr/local/bin/k3s-uninstall.sh
+  args:
+    removes: /usr/local/bin/k3s-uninstall.sh
+  ignore_errors: true
+
+- name: Run k3s-agent-uninstall.sh if present (agent nodes)
+  become: true
+  ansible.builtin.command: /usr/local/bin/k3s-agent-uninstall.sh
+  args:
+    removes: /usr/local/bin/k3s-agent-uninstall.sh
+  ignore_errors: true
+
+- name: Stop leftover k3s services
+  become: true
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - k3s
+    - k3s-agent
+  failed_when: false
+  ignore_errors: true
+
+- name: Remove leftover K3s binaries
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /usr/local/bin/k3s
+    - /usr/local/bin/k3s-uninstall.sh
+    - /usr/local/bin/k3s-agent-uninstall.sh
+  ignore_errors: true
+
+- name: Remove K3s / CNI data directories
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/lib/rancher/k3s
+    - /etc/rancher/k3s
+    - /var/lib/cni
+    - /etc/cni
+  ignore_errors: true
+
+- name: Remove K3s systemd unit files
+  become: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/k3s.service
+    - /etc/systemd/system/k3s-agent.service
+  ignore_errors: true
+
+- name: Reload systemd after unit removal
+  become: true
+  ansible.builtin.command: systemctl daemon-reload
+  ignore_errors: true

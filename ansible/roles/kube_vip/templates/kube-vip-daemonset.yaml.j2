@@ -1,0 +1,100 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kube-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-vip
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kube-vip-role
+rules:
+  - apiGroups: [""]
+    resources: ["services", "endpoints", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kube-vip-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kube-vip-role
+subjects:
+  - kind: ServiceAccount
+    name: kube-vip
+    namespace: kube-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kube-vip-ds
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: kube-vip
+  template:
+    metadata:
+      labels:
+        app: kube-vip
+    spec:
+      serviceAccountName: kube-vip
+      hostNetwork: true
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+      containers:
+        - name: kube-vip
+          image: "ghcr.io/kube-vip/kube-vip:{{ kube_vip_version | default('v0.8.0') }}"
+          args:
+            - manager
+          env:
+            # Interface that has access to your LAN (same as Cilium iface)
+            - name: vip_interface
+              value: "{{ cilium_iface }}"
+
+            # The virtual IP for the Kubernetes API
+            - name: vip_address
+              value: "{{ k3s_vip }}"
+
+            # Use ARP to advertise the VIP on the L2 network
+            - name: vip_arp
+              value: "true"
+
+            # Enable control-plane (API server) VIP handling
+            - name: cp_enable
+              value: "true"
+            - name: cp_namespace
+              value: "kube-system"
+
+            # Enable leader election so only one node owns the VIP
+            - name: vip_leaderelection
+              value: "true"
+            - name: vip_leasename
+              value: "kube-vip"
+            - name: vip_leaseduration
+              value: "15"
+            - name: vip_renewdeadline
+              value: "10"
+            - name: vip_retryperiod
+              value: "2"
+
+            # Disable Service LB, Cilium handles that
+            - name: lb_enable
+              value: "false"
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_RAW

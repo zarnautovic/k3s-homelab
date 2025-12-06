@@ -1,0 +1,39 @@
+# site.yml
+---
+- name: Bootstrap K3s cluster - base config on all nodes
+  hosts: all
+  become: yes
+  roles:
+    - common
+
+- name: Install K3s servers (control-plane)
+  hosts: cp
+  become: yes
+  serial: 1
+  roles:
+    - k3s_server
+
+- name: Deploy Cilium CNI + L2 LB
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - cilium
+
+- name: Deploy Kube-VIP VIP
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - kube_vip
+  
+- name: Install K3s agents (workers)
+  hosts: workers
+  become: yes
+  roles:
+    - k3s_agent
+
+
+
+
+

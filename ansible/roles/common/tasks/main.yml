@@ -1,0 +1,56 @@
+---
+- name: Set timezone
+  become: true
+  ansible.builtin.command: timedatectl set-timezone {{ timezone }}
+  changed_when: false  # avoids "changed" each time if already set
+
+- name: Ensure basic packages are installed
+  become: true
+  ansible.builtin.apt:
+    name:
+      - curl
+      - ca-certificates
+      - gnupg
+      - software-properties-common
+      - iptables
+      - ipset
+    state: present
+    update_cache: yes
+
+- name: Disable swap (runtime)
+  become: true
+  ansible.builtin.command: swapoff -a
+  when: ansible_facts['swaptotal_mb'] | int > 0
+  changed_when: false
+
+- name: Remove swap from /etc/fstab (permanent)
+  become: true
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '^([^#].*\s+swap\s+.*)$'
+    replace: '# \1'
+  register: swap_fstab
+
+- name: Enable br_netfilter and ip_forward
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-kubernetes.conf
+    content: |
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.ipv4.ip_forward = 1
+  register: sysctl_k8s
+
+- name: Apply sysctl settings
+  become: true
+  ansible.builtin.command: sysctl --system
+  when: sysctl_k8s.changed
+
+- name: Ensure bpffs is mounted for eBPF
+  become: true
+  ansible.builtin.mount:
+    path: /sys/fs/bpf
+    src: bpffs
+    fstype: bpf
+    state: mounted
+

@@ -1,0 +1,88 @@
+---
+# STEP 1: Helm repo
+- name: Ensure Cilium Helm repo exists
+  delegate_to: localhost
+  kubernetes.core.helm_repository:
+    name: cilium
+    repo_url: https://helm.cilium.io
+  run_once: true
+
+# STEP 2: Render Helm values
+- name: Render Cilium values.yaml
+  delegate_to: localhost
+  ansible.builtin.template:
+    src: cilium-values.yaml.j2
+    dest: ./cilium-values.yaml
+  run_once: true
+
+# STEP 3: Install Cilium
+- name: Install/upgrade Cilium via Helm
+  delegate_to: localhost
+  kubernetes.core.helm:
+    name: cilium
+    chart_ref: cilium/cilium
+    chart_version: "{{ cilium_version }}"
+    namespace: kube-system
+    values_files:
+      - ./cilium-values.yaml
+  run_once: true
+  
+- name: Wait for CiliumLoadBalancerIPPool CRD to exist
+  delegate_to: localhost
+  ansible.builtin.command: kubectl get crd ciliumloadbalancerippools.cilium.io
+  register: cilium_lb_crd
+  changed_when: false
+  retries: 20
+  delay: 6
+  until: cilium_lb_crd.rc == 0
+  run_once: true
+
+- name: Wait for CiliumL2AnnouncementPolicy CRD to exist
+  delegate_to: localhost
+  ansible.builtin.command: kubectl get crd ciliuml2announcementpolicies.cilium.io
+  register: cilium_l2_crd
+  changed_when: false
+  retries: 20
+  delay: 6
+  until: cilium_l2_crd.rc == 0
+  run_once: true
+
+# STEP 4: LB & L2 Manifests
+- name: Apply CiliumLoadBalancerIPPool
+  delegate_to: localhost
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: cilium.io/v2alpha1
+      kind: CiliumLoadBalancerIPPool
+      metadata:
+        name: default-pool
+      spec:
+        blocks:
+          - cidr: "{{ cilium_lb_pool_cidr }}"
+  run_once: true
+
+- name: Apply CiliumL2AnnouncementPolicy
+  delegate_to: localhost
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: cilium.io/v2alpha1
+      kind: CiliumL2AnnouncementPolicy
+      metadata:
+        name: default-l2-policy
+      spec:
+        nodeSelector: {}
+        interfaces:
+          - "{{ cilium_iface }}"
+        loadBalancerIPs: true
+        externalIPs: true
+  run_once: true
+  
+ # STEP 5: Cleanup rendered values file
+- name: Remove rendered cilium-values.yaml
+  delegate_to: localhost
+  ansible.builtin.file:
+    path: ./cilium-values.yaml
+    state: absent
+  run_once: true 

@@ -1,0 +1,20 @@
+node-name: {{ inventory_hostname }}
+
+server: https://{{ hostvars[groups['cp'][0]].ansible_host }}:6443
+token: {{ k3s_token }}
+
+tls-san:
+  - {{ k3s_vip }}
+
+cluster-cidr: {{ k3s_cluster_cidr }}
+service-cidr: {{ k3s_service_cidr }}
+
+disable:
+  - traefik
+  - servicelb
+  - flannel
+  - kube-proxy
+
+flannel-backend: "none"
+write-kubeconfig-mode: "0644"
+

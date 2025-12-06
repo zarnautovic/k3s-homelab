@@ -1,0 +1,73 @@
+---
+- name: Apply Kube-VIP manifest
+  delegate_to: localhost
+  run_once: true
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('template', 'kube-vip-daemonset.yaml.j2') | from_yaml_all | list }}"
+
+- name: Wait for kube-vip DaemonSet to be created
+  delegate_to: localhost
+  run_once: true
+  ansible.builtin.command: >
+    kubectl -n kube-system get ds kube-vip-ds
+  register: kubevip_ds_check
+  retries: 30
+  delay: 2
+  until: kubevip_ds_check.rc == 0
+
+- name: Wait for kube-vip pods to be Ready
+  delegate_to: localhost
+  run_once: true
+  ansible.builtin.command: >
+    kubectl -n kube-system wait --for=condition=ready pod -l app=kube-vip --timeout=60s
+  register: kubevip_wait_pods
+  retries: 10
+  delay: 6
+  until: kubevip_wait_pods.rc == 0
+  changed_when: false
+
+- name: Wait until VIP becomes reachable from Ansible control host
+  delegate_to: localhost
+  run_once: true
+  ansible.builtin.shell: |
+    ping -c1 {{ k3s_vip }}
+  register: vip_ping_result
+  retries: 30
+  delay: 2
+  until: vip_ping_result.rc == 0
+
+- name: Slurp current local kubeconfig
+  run_once: true
+  delegate_to: localhost
+  ansible.builtin.slurp:
+    src: "{{ lookup('env', 'HOME') }}/.kube/config"
+  register: local_kubeconfig_file
+
+- name: Parse local kubeconfig as YAML
+  run_once: true
+  delegate_to: localhost
+  ansible.builtin.set_fact:
+    k3s_datasource_vip: >-
+      {{ local_kubeconfig_file.content | b64decode | from_yaml }}
+
+- name: Patch clusters[0].cluster.server to use VIP
+  run_once: true
+  delegate_to: localhost
+  ansible.builtin.set_fact:
+    k3s_datasource_vip: "{{ k3s_datasource_vip | combine(patch, recursive=True) }}"
+  vars:
+    patch:
+      clusters:
+        - cluster:
+            certificate-authority-data: "{{ k3s_datasource_vip.clusters[0].cluster['certificate-authority-data'] }}"
+            server: "https://{{ k3s_vip }}:6443"
+          name: "{{ k3s_datasource_vip.clusters[0].name }}"
+
+- name: Overwrite local kubeconfig with VIP-based version
+  run_once: true
+  delegate_to: localhost
+  ansible.builtin.copy:
+    dest: "{{ lookup('env', 'HOME') }}/.kube/config"
+    content: "{{ k3s_datasource_vip | to_nice_yaml(indent=2) }}"
+    mode: '0600'
